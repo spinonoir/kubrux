@@ -1,0 +1,54 @@
+## relay.scene - Three-Way Message Relay
+## Shows message passing through an intermediary
+## Run with: kubrux relay.scene
+
+@actor alice --host host353 --dir ~ --script alice.txt
+@actor relay --host host353 --dir ~ --script relay.txt
+@actor bob   --host host353 --dir ~ --script bob.txt
+@layout vertical
+
+## === ACT 1: SETUP THE RELAY ===
+relay: # Relay node: listen on 8001, forward to 8002
+relay: # Using named pipes for bidirectional relay
+relay: mkfifo /tmp/fifo1 /tmp/fifo2 2>/dev/null || true
+
+@pause 0.5
+
+relay: # Start the relay (simplified - just show concept)
+relay: nc -l 8001 | tee /tmp/relay.log | nc -l 8002 &
+
+@pause 1
+
+## === ACT 2: BOB CONNECTS ===
+bob: # Bob connects to receive from relay
+bob: nc localhost 8002
+
+@pause 1
+
+## === ACT 3: ALICE SENDS ===
+alice: # Alice connects to send through relay
+alice: nc localhost 8001
+
+@pause 1
+
+alice: @type Hello Bob, this goes through the relay!
+alice: @enter
+
+@pause 2
+
+## === ACT 4: EXAMINE THE RELAY ===
+relay: # Check what the relay captured
+relay: cat /tmp/relay.log
+
+@pause 2
+
+## === CURTAIN ===
+alice: @ctrl-c
+bob: @ctrl-c
+relay: @ctrl-c
+
+@pause 0.5
+
+relay: rm -f /tmp/fifo1 /tmp/fifo2 /tmp/relay.log
+relay: pkill -f "nc -l 800" || true
+relay: echo "Relay scene complete"

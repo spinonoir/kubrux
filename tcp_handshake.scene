@@ -1,0 +1,45 @@
+## tcp_handshake.scene - TCP Client-Server Communication
+## Demonstrates basic netcat TCP communication
+## Run with: kubrux tcp_handshake.scene
+
+@actor server --host host353 --dir ~/csci353/lab2 --script server.txt
+@actor client --host host353 --dir ~/csci353/lab2 --script client.txt
+@layout vertical
+
+## === ACT 1: SERVER SETUP ===
+server: # Start a TCP server listening on port 9000
+server: nc -l 9000
+
+@pause 1.5
+
+## === ACT 2: CLIENT CONNECTS ===
+client: # Connect to the server
+client: nc localhost 9000
+
+@pause 1
+
+## === ACT 3: DIALOGUE ===
+client: @type Hello from the client!
+client: @enter
+
+@pause 1
+
+server: @type Message received! Replying...
+server: @enter
+
+@pause 1
+
+client: @type Goodbye!
+client: @enter
+
+@pause 1.5
+
+## === CURTAIN ===
+client: @ctrl-c
+@pause 0.5
+server: @ctrl-c
+
+@pause 0.5
+
+server: echo "Server exit"
+client: echo "Client exit"

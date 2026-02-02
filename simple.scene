@@ -1,0 +1,24 @@
+## simple.scene - A single-actor scene
+## Run with: kubrux simple.scene
+
+@actor client --host host353 --dir ~/csci353/lab1 --script demo.txt
+
+client: # Show where we are
+client: pwd
+
+client: # List files in the lab directory
+client: ls -la
+
+@pause 1
+
+client: # Check our IP address
+client: hostname -I
+
+@pause 1
+
+client: # Show network interfaces
+client: ip link show
+
+@pause 2
+
+client: echo "Scene complete."

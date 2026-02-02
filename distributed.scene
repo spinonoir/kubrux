@@ -1,0 +1,53 @@
+## distributed.scene - Multi-Host Distributed System
+## Three actors across different hosts
+## Run with: kubrux distributed.scene
+
+@actor db      --host db.example.com     --dir ~/app/db      --script db.txt
+@actor app     --host app.example.com    --dir ~/app/server  --script app.txt
+@actor client  --host client.example.com --dir ~/app/client  --script client.txt
+@layout vertical
+
+## === ACT 1: DATABASE ===
+db: # Starting PostgreSQL database
+db: pg_ctl start -D ./data -l logfile
+
+@pause 3
+
+db: # Verify database is running
+db: pg_isready
+
+@pause 1
+
+## === ACT 2: APPLICATION SERVER ===
+app: # Starting application server
+app: ./start_server.sh --db-host db.example.com
+
+@pause 2
+
+app: # Check server status
+app: curl -s localhost:8080/health
+
+@pause 1
+
+## === ACT 3: CLIENT REQUESTS ===
+client: # Making API request
+client: curl -X GET http://app.example.com:8080/api/users
+
+@pause 2
+
+client: # Creating a new user
+client: curl -X POST http://app.example.com:8080/api/users -d '{"name": "test"}'
+
+@pause 2
+
+## === ACT 4: VERIFY ===
+db: # Check database for new record
+db: psql -c "SELECT * FROM users ORDER BY id DESC LIMIT 5;"
+
+@pause 2
+
+## === CURTAIN ===
+client: echo "Client complete"
+app: @ctrl-c
+@pause 0.5
+db: pg_ctl stop -D ./data

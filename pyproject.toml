@@ -1,0 +1,17 @@
+[project]
+name = "kubrux"
+version = "1.0.0"
+description = "Deterministic multi-terminal scene direction using tmux"
+readme = "docs/README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "libtmux>=0.24.0",
+    "shtab>=1.7",
+]
+
+[project.scripts]
+kubrux = "kubrux:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

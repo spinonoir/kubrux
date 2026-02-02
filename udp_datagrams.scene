@@ -1,0 +1,53 @@
+## udp_datagrams.scene - UDP Communication
+## Shows UDP vs TCP differences - connectionless protocol
+## Run with: kubrux udp_datagrams.scene
+
+@actor server --host host353 --dir ~/csci353/lab3 --script udp_server.txt
+@actor client --host host353 --dir ~/csci353/lab3 --script udp_client.txt
+@layout horizontal
+
+## === ACT 1: UDP SERVER ===
+server: # Start UDP listener on port 9999
+server: nc -u -l 9999
+
+@pause 1
+
+## === ACT 2: UDP CLIENT ===
+client: # Send UDP datagram (no connection handshake!)
+client: echo "First UDP message" | nc -u localhost 9999
+
+@pause 1
+
+client: # Send another - each is independent
+client: echo "Second UDP message" | nc -u localhost 9999
+
+@pause 1
+
+client: # Interactive UDP session
+client: nc -u localhost 9999
+
+@pause 0.5
+
+client: @type Hello via UDP
+client: @enter
+
+@pause 1
+
+server: @type Got it! Replying over UDP
+server: @enter
+
+@pause 1
+
+## === EPILOGUE ===
+client: @ctrl-c
+@pause 0.3
+server: @ctrl-c
+
+@pause 0.5
+
+server: # Note: UDP has no connection state
+server: # Messages can be lost, duplicated, or reordered
+server: # No automatic retransmission like TCP
+server: echo "UDP scene complete"
+
+client: echo "Client done"

@@ -6,9 +6,10 @@ Scene files (`.scene`) are the scripts that kubrux executes. They define actors,
 
 Scene files are plain text files with the `.scene` extension. They consist of:
 
-1. **Actor definitions** (at the top)
-2. **Layout directives** (optional)
-3. **Dialogue and directions** (the main script)
+1. **Scene-level defaults** (optional, at the top)
+2. **Actor definitions** (at the top)
+3. **Layout directives** (optional)
+4. **Dialogue and directions** (the main script)
 
 ## Actor Definitions
 
@@ -43,6 +44,26 @@ kubrux scene.scene --host hostname --dir ~/path
 
 In this mode, commands can be written without actor prefixes, and they go to the default actor. However, **defining an actor name is recommended** for consistency.
 
+### Scene-level defaults
+
+You can set default values for `--host`, `--dir`, `--script`, and `--local` with an optional `@defaults` directive at the top of the scene file. Any option not specified on an `@actor` line is inherited from `@defaults`.
+
+```
+@defaults --host HOSTNAME --dir PATH [--script FILE] [--local]
+```
+
+Place `@defaults` before the `@actor` lines that use it. Only one `@defaults` block is applied (the last one if multiple appear).
+
+**Example:**
+
+```
+@defaults --host host353 --dir ~/lab --script demo.txt
+@actor server --script server.log
+@actor client --script client.log
+```
+
+Here `server` and `client` inherit `--host host353` and `--dir ~/lab` from defaults; each overrides only `--script`.
+
 ### Multi-Actor Mode
 
 Define multiple actors at the top of the scene file:
@@ -65,13 +86,28 @@ Define multiple actors at the top of the scene file:
 # Single actor scene
 @actor client --host host353 --dir ~/lab --script client.log
 
-# Multi-actor scene
+# Multi-actor scene (with scene-level defaults)
+@defaults --host host353 --dir ~/lab
+@actor server --script server.log
+@actor client --script client.log
+
+# Multi-actor scene (explicit per-actor)
 @actor server --host host353 --dir ~/lab --script server.log
 @actor client --host host353 --dir ~/lab --script client.log
 
 # Local actor
 @actor local --local --dir ~/test
 ```
+
+### Attach directive
+
+If the scene file contains a line `@attach` (or `@attach` with trailing text), kubrux will attach this terminal to the tmux session when the scene runs, so you can watch it live without passing `-a` on the command line. You can still pass `-a` or `--attach` on the CLI; the scene file and CLI both request attach.
+
+```
+@attach
+```
+
+Place it with the other top-of-file directives (e.g. after `@defaults`, before or after `@actor`).
 
 ## Layout Directives
 

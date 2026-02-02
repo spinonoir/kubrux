@@ -173,14 +173,19 @@ class Kubrux:
             time.sleep(0.5)
     
     def _get_pane(self, actor: str = None) -> libtmux.Pane:
-        """Get an actor's stage (pane)."""
+        """Get an actor's stage (pane) and select it so keys go to the right pane and attach follows focus."""
         if actor is None:
             actor = self.lead_actor
         
         if actor not in self.cast:
             raise ValueError(f"Unknown actor: {actor}")
         
-        return self.cast[actor].pane
+        pane = self.cast[actor].pane
+        try:
+            pane.select()
+        except AttributeError:
+            pane.select_pane()
+        return pane
     
     def deliver_line(self, line: str, actor: str = None):
         """Actor types and delivers a line (command)."""
@@ -250,10 +255,29 @@ class Kubrux:
         logger.info("Wrapping up scene...")
         for config in self.cast.values():
             if config.script_file:
-                config.pane.send_keys("exit", enter=True)
-                time.sleep(0.3)
+                # Terminate script command by sending exit (exits the script session)
+                pane = self._get_pane(config.name)
+                pane.send_keys("exit", enter=True)
+                time.sleep(0.5)  # Give script time to terminate
     
-    def _parse_actor_directive(self, line: str) -> ActorConfig:
+    def _parse_defaults_directive(self, line: str) -> ActorConfig:
+        """Parse @defaults line into a config used as defaults for @actor (name and pane unused)."""
+        parts = shlex.split(line)
+        parts.pop(0)  # Remove @defaults
+        config = ActorConfig(name="")
+        while parts:
+            opt = parts.pop(0)
+            if opt == "--host" and parts:
+                config.host = parts.pop(0)
+            elif opt == "--dir" and parts:
+                config.working_dir = parts.pop(0)
+            elif opt == "--script" and parts:
+                config.script_file = parts.pop(0)
+            elif opt == "--local":
+                config.is_local = True
+        return config
+
+    def _parse_actor_directive(self, line: str, defaults: Optional[ActorConfig] = None) -> ActorConfig:
         parts = shlex.split(line)
         parts.pop(0)  # Remove @actor
         
@@ -262,6 +286,7 @@ class Kubrux:
         
         name = parts.pop(0)
         config = ActorConfig(name=name)
+        actor_had_local = False
         
         while parts:
             opt = parts.pop(0)
@@ -273,6 +298,17 @@ class Kubrux:
                 config.script_file = parts.pop(0)
             elif opt == "--local":
                 config.is_local = True
+                actor_had_local = True
+        
+        if defaults:
+            if config.host is None:
+                config.host = defaults.host
+            if config.working_dir is None:
+                config.working_dir = defaults.working_dir
+            if config.script_file is None:
+                config.script_file = defaults.script_file
+            if not actor_had_local:
+                config.is_local = defaults.is_local
         
         return config
     
@@ -317,20 +353,60 @@ class Kubrux:
     
     def direct(self, scene_file: Path, default_host: str = None,
                default_dir: str = None, default_script: str = None,
-               default_local: bool = False):
+               default_local: bool = False, shared_defaults: Optional[ActorConfig] = None):
         
         logger.info(f"Directing scene file: {scene_file}")
         content = scene_file.read_text()
         lines = content.splitlines()
         
-        # First pass: casting call
+        # First pass: casting call (use stripped lines so leading whitespace doesn't break @defaults/@actor)
+        defaults: Optional[ActorConfig] = None
         for line in lines:
             line = line.rstrip()
-            if line.startswith("@actor "):
-                config = self._parse_actor_directive(line)
-                self.add_actor(config)
-            elif line.startswith("@layout "):
-                self.layout = line.split(maxsplit=1)[1].strip()
+            stripped = line.strip()
+            if stripped.startswith("@defaults"):
+                defaults = self._parse_defaults_directive(stripped)
+            elif stripped.startswith("@actor "):
+                config = self._parse_actor_directive(stripped, defaults)
+                # Apply shared defaults if provided and actor doesn't have the setting
+                if shared_defaults:
+                    if config.host is None:
+                        config.host = shared_defaults.host
+                    if config.working_dir is None:
+                        config.working_dir = shared_defaults.working_dir
+                    if config.script_file is None:
+                        config.script_file = shared_defaults.script_file
+                    if not config.is_local:
+                        config.is_local = shared_defaults.is_local
+                # Check if actor already exists with same name and compatible config
+                if config.name in self.cast:
+                    existing = self.cast[config.name]
+                    # Reuse if host and working_dir match (or both None)
+                    if (existing.host == config.host and 
+                        existing.working_dir == config.working_dir and
+                        existing.is_local == config.is_local):
+                        logger.info(f"Reusing existing actor: {config.name}")
+                        # Update script_file if different
+                        if config.script_file and config.script_file != existing.script_file:
+                            # Exit old script if it was running
+                            if existing.script_file:
+                                pane = self._get_pane(config.name)
+                                pane.send_keys("exit", enter=True)
+                                time.sleep(0.5)
+                            existing.script_file = config.script_file
+                            # Start new script recording
+                            pane = self._get_pane(config.name)
+                            cmd = f"script {config.script_file}"
+                            logger.debug(f"[{config.name}] Starting new recording: {cmd}")
+                            pane.send_keys(cmd, enter=True)
+                            time.sleep(0.5)
+                    else:
+                        logger.warning(f"Actor {config.name} already exists with different config, adding anyway")
+                        self.add_actor(config)
+                else:
+                    self.add_actor(config)
+            elif stripped.startswith("@layout "):
+                self.layout = stripped.split(maxsplit=1)[1].strip()
         
         # If no actors defined, single-actor scene
         if not self.cast:
@@ -342,13 +418,23 @@ class Kubrux:
                 script_file=default_script,
                 is_local=default_local
             )
+            # Apply shared defaults if provided
+            if shared_defaults:
+                if config.host is None:
+                    config.host = shared_defaults.host
+                if config.working_dir is None:
+                    config.working_dir = shared_defaults.working_dir
+                if config.script_file is None:
+                    config.script_file = shared_defaults.script_file
+                if not config.is_local:
+                    config.is_local = shared_defaults.is_local
             self.add_actor(config)
         
         # Second pass: action!
         for line in lines:
             line = line.rstrip()
             
-            if not line or line.startswith("##") or line.startswith("@actor ") or line.startswith("@layout "):
+            if not line or line.startswith("##") or line.strip().startswith("@defaults") or line.strip().startswith("@actor ") or line.strip().startswith("@layout ") or line.strip().startswith("@attach"):
                 continue
             
             # Check for actor prefix (actor: dialogue)
@@ -367,6 +453,139 @@ class Kubrux:
                 self.deliver_line(line, actor)
 
 
+def _extract_lab_number(scene_files: list[Path]) -> Optional[int]:
+    """Extract lab number from scene filenames (e.g., lab2a.scene -> 2)."""
+    for scene_file in scene_files:
+        match = re.search(r'lab(\d+)', scene_file.name, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _create_tar_archive(scene_files: list[Path], director: Kubrux):
+    """Create tar archive after scenes complete."""
+    logger.info("Creating tar archive...")
+    
+    # Extract lab number from scene filenames
+    lab_num = _extract_lab_number(scene_files)
+    if lab_num is None:
+        logger.warning("Could not extract lab number from scene filenames, using 'lab'")
+        tar_name = "lab.tar.gz"
+        script_pattern = "lab*.script"
+    else:
+        tar_name = f"lab{lab_num}.tar.gz"
+        script_pattern = f"lab{lab_num}*.script"
+    
+    # Find first actor with a working directory
+    working_dir = None
+    host = None
+    is_local = False
+    actor_name = None
+    
+    for config in director.cast.values():
+        if config.working_dir:
+            working_dir = config.working_dir
+            host = config.host
+            is_local = config.is_local
+            actor_name = config.name
+            break
+    
+    if not working_dir:
+        logger.warning("No working directory found, skipping tar archive creation")
+        return
+    
+    # Build tar command
+    tar_cmd = f"tar cvzf {tar_name} {script_pattern} Makefile *.c* *.h*"
+    
+    logger.info(f"Executing: {tar_cmd} in {working_dir}")
+    
+    # Execute tar command in the actor's working directory
+    pane = director._get_pane(actor_name)
+    
+    # Ensure we're in the right directory
+    pane.send_keys(f"cd {working_dir}", enter=True)
+    time.sleep(0.5)
+    
+    # Execute tar command
+    pane.send_keys(tar_cmd, enter=True)
+    time.sleep(1.0)
+    
+    print(f"📦 Created archive: {tar_name}")
+
+
+def _parse_defaults_directive_static(line: str) -> ActorConfig:
+    """Parse @defaults line into a config (static version, doesn't require Kubrux instance)."""
+    parts = shlex.split(line)
+    parts.pop(0)  # Remove @defaults
+    config = ActorConfig(name="")
+    while parts:
+        opt = parts.pop(0)
+        if opt == "--host" and parts:
+            config.host = parts.pop(0)
+        elif opt == "--dir" and parts:
+            config.working_dir = parts.pop(0)
+        elif opt == "--script" and parts:
+            config.script_file = parts.pop(0)
+        elif opt == "--local":
+            config.is_local = True
+    return config
+
+
+def _parse_actor_directive_static(line: str) -> ActorConfig:
+    """Parse @actor line into a config (static version, doesn't require Kubrux instance)."""
+    parts = shlex.split(line)
+    parts.pop(0)  # Remove @actor
+    
+    if not parts:
+        return ActorConfig(name="")
+    
+    name = parts.pop(0)
+    config = ActorConfig(name=name)
+    
+    while parts:
+        opt = parts.pop(0)
+        if opt == "--host" and parts:
+            config.host = parts.pop(0)
+        elif opt == "--dir" and parts:
+            config.working_dir = parts.pop(0)
+        elif opt == "--script" and parts:
+            config.script_file = parts.pop(0)
+        elif opt == "--local":
+            config.is_local = True
+    
+    return config
+
+
+def _extract_defaults_from_scene(scene_file: Path) -> Optional[ActorConfig]:
+    """Extract default host/dir/script from first scene file for sharing across scenes."""
+    try:
+        content = scene_file.read_text()
+        lines = content.splitlines()
+        defaults: Optional[ActorConfig] = None
+        
+        for line in lines:
+            line = line.rstrip()
+            stripped = line.strip()
+            if stripped.startswith("@defaults"):
+                defaults = _parse_defaults_directive_static(stripped)
+                break
+            elif stripped.startswith("@actor "):
+                # Extract defaults from first actor if no @defaults found
+                if defaults is None:
+                    config = _parse_actor_directive_static(stripped)
+                    defaults = ActorConfig(name="")
+                    defaults.host = config.host
+                    defaults.working_dir = config.working_dir
+                    defaults.script_file = config.script_file
+                    defaults.is_local = config.is_local
+                break
+        
+        return defaults
+    except Exception as e:
+        logger.debug(f"Failed to extract defaults from {scene_file}: {e}")
+        return None
+
+
 def get_parser() -> argparse.ArgumentParser:
     """Build and return the argument parser. Used for CLI and shtab completion generation."""
     parser = argparse.ArgumentParser(
@@ -374,7 +593,7 @@ def get_parser() -> argparse.ArgumentParser:
         description="Deterministic multi-terminal scene direction using tmux",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("scene_file", type=Path, nargs="?", help="Scene file (*.scene)")
+    parser.add_argument("scene_file", type=Path, nargs="+", help="Scene file(s) (*.scene)")
     parser.add_argument("--host", help="Default SSH host")
     parser.add_argument("--dir", "-d", dest="working_dir", help="Default working directory")
     parser.add_argument("--script", "-s", dest="script_file", help="Default script recording filename")
@@ -388,6 +607,13 @@ def get_parser() -> argparse.ArgumentParser:
         "-a",
         action="store_true",
         help="Attach this terminal to the tmux session to watch the scene live",
+    )
+    parser.add_argument(
+        "--finalize",
+        "--tar",
+        dest="finalize",
+        action="store_true",
+        help="Create tar archive after scenes complete: tar cvzf lab[N].tar.gz lab2*.script Makefile *.c* *.h*",
     )
     try:
         import shtab
@@ -423,29 +649,65 @@ def main():
         stream=sys.stderr
     )
 
-    if not args.scene_file.exists():
-        print(f"Scene not found: {args.scene_file}")
-        return 1
+    # Validate all scene files exist
+    scene_files = args.scene_file if isinstance(args.scene_file, list) else [args.scene_file]
+    for scene_file in scene_files:
+        if not scene_file.exists():
+            print(f"Scene not found: {scene_file}")
+            return 1
+
+    # Check for @attach in any scene file
+    try:
+        for scene_file in scene_files:
+            scene_content = scene_file.read_text(encoding="utf-8")
+            attach_from_scene = any(
+                ln.strip() == "@attach" or ln.strip().startswith("@attach ")
+                for ln in scene_content.splitlines()
+            )
+            if attach_from_scene:
+                args.attach = True
+                break
+    except Exception:
+        pass  # keep args.attach as-is if read fails
+    
+    # Extract shared defaults from first scene
+    shared_defaults = None
+    if len(scene_files) > 1:
+        shared_defaults = _extract_defaults_from_scene(scene_files[0])
+        if shared_defaults:
+            logger.info(f"Extracted shared defaults: host={shared_defaults.host}, dir={shared_defaults.working_dir}")
     
     director = Kubrux(session_name=args.session)
     
-    print(f"🎬 Directing: {args.scene_file}")
+    scene_list = ", ".join(str(sf) for sf in scene_files)
+    print(f"🎬 Directing: {scene_list}")
     print(f"📺 Watch: tmux attach -t {args.session}")
 
     exit_code = 0
 
-    def run_scene():
+    def run_scenes():
         nonlocal exit_code
         try:
-            director.direct(
-                args.scene_file,
-                default_host=args.host,
-                default_dir=args.working_dir,
-                default_script=args.script_file,
-                default_local=args.local,
-            )
+            # Run all scenes sequentially
+            for i, scene_file in enumerate(scene_files, 1):
+                print(f"\n🎭 Scene {i}/{len(scene_files)}: {scene_file.name}")
+                director.direct(
+                    scene_file,
+                    default_host=args.host,
+                    default_dir=args.working_dir,
+                    default_script=args.script_file,
+                    default_local=args.local,
+                    shared_defaults=shared_defaults,
+                )
+            
+            # Wrap up all script recordings
             director.wrap()
-            print("🎬 That's a wrap!")
+            
+            # Create tar archive if requested
+            if args.finalize:
+                _create_tar_archive(scene_files, director)
+            
+            print("\n🎬 That's a wrap!")
             exit_code = 0
         except KeyboardInterrupt:
             print("\n🛑 Director interrupted!")
@@ -455,9 +717,9 @@ def main():
             exit_code = 1
 
     if args.attach:
-        # Run the scene in a background thread so we can attach this terminal
+        # Run the scenes in a background thread so we can attach this terminal
         # to the tmux session and watch the action live.
-        scene_thread = threading.Thread(target=run_scene, daemon=False)
+        scene_thread = threading.Thread(target=run_scenes, daemon=False)
         scene_thread.start()
 
         try:
@@ -471,7 +733,7 @@ def main():
         scene_thread.join()
         return exit_code
     else:
-        run_scene()
+        run_scenes()
         return exit_code
 
 

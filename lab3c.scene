@@ -1,0 +1,42 @@
+## lab3c.scene - Lab 3 Part C: Combined Server and Client
+## Run with: kubrux lab3c.scene
+
+@defaults --host host353 --dir ~/lab3
+@attach
+@actor server --script lab3c-server.script
+@actor client --script lab3c-client.script
+@layout vertical
+
+## === ACT 1: SERVER SETUP ===
+server: make clean && make lab3c
+server: ./lab3c 1000
+
+@pause 1
+
+server: ./lab3c 12345
+
+@pause 1.5
+
+## === ACT 2: CLIENT CONNECTS ===
+client: ./lab3c -c 12345
+client: @type Hello World!
+client: @enter
+
+@pause 1
+
+client: ./lab3c -c 12345
+client: @type Good-bye for now.
+client: @enter
+
+@pause 1
+
+client: ./lab3c -c 12345
+client: @enter
+
+@pause 1
+
+## === CURTAIN ===
+client: exit
+@pause 0.5
+server: @ctrl-c
+server: exit

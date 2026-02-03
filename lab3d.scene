@@ -1,0 +1,72 @@
+## lab3d.scene - Lab 3 Part D: Multiple Lines of Input
+## Run with: kubrux lab3d.scene
+
+@defaults --host host353 --dir ~/lab3
+@attach
+@actor server --script lab3d-server.script
+@actor client --script lab3d-client.script
+@layout vertical
+
+## === ACT 1: SERVER SETUP ===
+server: ./lab3d 12345
+
+@pause 1.5
+
+## === ACT 2: CLIENT SESSION 1 ===
+client: ./lab3d -c 12345
+client: @type hello
+client: @enter
+
+@pause 1
+
+client: @type how are you?
+client: @enter
+
+@pause 1
+
+client: @type bye
+client: @enter
+
+@pause 1
+
+client: @enter
+
+@pause 1
+
+## === ACT 3: CLIENT SESSION 2 ===
+client: ./lab3d -c 12345
+client: @type testing
+client: @enter
+
+@pause 1
+
+client: @type 1
+client: @enter
+
+@pause 1
+
+client: @type 2
+client: @enter
+
+@pause 1
+
+client: @type 3
+client: @enter
+
+@pause 1
+
+client: @enter
+
+@pause 1
+
+## === ACT 4: CRASH TEST ===
+client: ./lab3d -c 12345
+client: @key C-l
+client: @enter
+
+@pause 2
+
+## === CURTAIN ===
+client: exit
+@pause 0.5
+server: exit

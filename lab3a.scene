@@ -1,0 +1,41 @@
+## lab3a.scene - Lab 3 Part A: Echo Server and Echo Client
+## Run with: kubrux lab3a.scene
+
+@defaults --host host353 --dir ~/lab3
+@attach
+@actor server --script lab3a-server.script
+@actor client --script lab3a-client.script
+@layout vertical
+
+## === ACT 1: SERVER SETUP ===
+server: uname -a
+server: cat /etc/os-release
+server: make echo-server
+server: make echo-client
+server: ./echo-server 12345
+
+@pause 1.5
+
+## === ACT 2: CLIENT CONNECTS ===
+client: ./echo-client 12345
+client: @type Hello World!
+client: @enter
+
+@pause 1
+
+client: ./echo-client 12345
+client: @type Good-bye for now.
+client: @enter
+
+@pause 1
+
+client: ./echo-client 12345
+client: @enter
+
+@pause 1
+
+## === CURTAIN ===
+client: exit
+@pause 0.5
+server: @ctrl-c
+server: exit

@@ -73,6 +73,9 @@ kubrux chat.scene
 # Run a scene (actors defined in scene file)
 kubrux scene.scene
 
+# Run and attach this terminal to watch live
+kubrux --attach scene.scene
+
 # Legacy: Run with CLI args (if no @actor in scene file)
 kubrux scene.scene --host hostname --dir ~/path
 
@@ -102,6 +105,9 @@ tmux attach -t kubrux
 # Or list sessions
 tmux ls
 ```
+
+**Stop playback early while attached:**
+- When running with `--attach` and viewing the session, press your tmux prefix (by default `Ctrl-b`) followed by `Q` to ask kubrux to stop the current run and return you to a single shell prompt.
 
 **SSH connection issues:**
 - Ensure SSH keys are set up for passwordless authentication

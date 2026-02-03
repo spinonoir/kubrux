@@ -1,0 +1,144 @@
+## lab3b.scene - Lab 3 Part B: GDB Debugging
+## Run with: kubrux lab3b.scene
+
+@defaults --host host353 --dir ~/lab3
+@attach
+@actor server --script lab3b-server.script
+@actor client --script lab3b-client.script
+@layout vertical
+
+## === ACT 1: SERVER IN GDB ===
+server: gdb echo-server
+server: set confirm off
+server: @type list 76
+server: @enter
+server: @type break 76
+server: @enter
+server: @type break main
+server: @enter
+server: @type run 12345
+server: @enter
+
+@pause 1
+
+## === ACT 2: EXAMINE MAIN ===
+server: @type list
+server: @enter
+server: @type print argc
+server: @enter
+server: @type print argv[0]
+server: @enter
+server: @type print argv[1]
+server: @enter
+server: @type cont
+server: @enter
+
+@pause 1
+
+## === ACT 3: CLIENT SENDS DATA ===
+client: ./echo-client 12345
+client: @type Hello!
+client: @enter
+
+@pause 1
+
+## === ACT 4: EXAMINE BUFFER ===
+server: @type l
+server: @enter
+server: @type p bytes_received
+server: @enter
+server: @type p buf[0]
+server: @enter
+server: @type p buf[1]
+server: @enter
+server: @type p buf[2]
+server: @enter
+server: @type p buf[3]
+server: @enter
+server: @type p buf[4]
+server: @enter
+server: @type p buf[5]
+server: @enter
+server: @type p buf[6]
+server: @enter
+server: @type p buf[7]
+server: @enter
+server: @type p buf[8]
+server: @enter
+server: @type p buf[9]
+server: @enter
+server: @type c
+server: @enter
+
+@pause 1
+
+## === ACT 5: CLIENT IN GDB ===
+client: gdb echo-client
+client: set confirm off
+client: @type list 61
+client: @enter
+client: @type break 61
+client: @enter
+client: @type run 12345
+client: @enter
+client: @type Bye.
+client: @enter
+
+@pause 1
+
+client: @type list
+client: @enter
+client: @type p message.c_str()
+client: @enter
+client: @type p message.length()
+client: @enter
+client: @type p message.c_str()[0]
+client: @enter
+client: @type p message.c_str()[1]
+client: @enter
+client: @type p message.c_str()[2]
+client: @enter
+client: @type p message.c_str()[3]
+client: @enter
+client: @type p message.c_str()[4]
+client: @enter
+client: @type c
+client: @enter
+
+@pause 1
+
+## === ACT 6: SERVER EXAMINES SECOND MESSAGE ===
+server: @type p bytes_received
+server: @enter
+server: @type p buf[0]
+server: @enter
+server: @type p buf[1]
+server: @enter
+server: @type p buf[2]
+server: @enter
+server: @type p buf[3]
+server: @enter
+server: @type p buf[4]
+server: @enter
+server: @type p buf[5]
+server: @enter
+server: @type p buf[6]
+server: @enter
+server: @type p buf[7]
+server: @enter
+server: @type c
+server: @enter
+
+@pause 1
+
+## === CURTAIN ===
+client: @type quit
+client: @enter
+client: exit
+@pause 0.5
+server: @ctrl-c
+server: @type quit
+server: @enter
+server: @type y
+server: @enter
+server: exit

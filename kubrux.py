@@ -4,6 +4,7 @@ kubrux - deterministic multi-terminal scene direction using tmux
 """
 
 import libtmux
+from libtmux.constants import PaneDirection
 import time
 import argparse
 import shlex
@@ -13,6 +14,8 @@ import logging
 import sys
 import subprocess
 import threading
+import signal
+import os
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
@@ -25,6 +28,10 @@ logger = logging.getLogger("kubrux")
 # libtmux's Pane.send_keys kwarg changed across versions (literal vs literally)
 _SEND_KEYS_LITERAL_KWARG: Optional[str] = None
 _SEND_KEYS_LITERAL_KWARG_DETERMINED = False
+
+
+class KubruxStopRequested(Exception):
+    """Signal that scene execution should stop early (e.g., from tmux interrupt)."""
 
 
 def _determine_send_keys_literal_kwarg(pane: libtmux.Pane) -> None:
@@ -121,6 +128,7 @@ class Kubrux:
         self.cast: dict[str, ActorConfig] = {}
         self.lead_actor: Optional[str] = None
         self.layout = "vertical"
+        self.stop_requested: Optional[threading.Event] = None
         
         # Timing controls
         self.typing_delay = 0.04
@@ -135,7 +143,9 @@ class Kubrux:
         else:
             first_pane = list(self.cast.values())[0].pane
             vertical = self.layout == "vertical"
-            config.pane = first_pane.split_window(vertical=vertical)
+            # libtmux 0.33+ removed Pane.split_window(); use Pane.split(direction=...)
+            direction = PaneDirection.Below if vertical else PaneDirection.Right
+            config.pane = first_pane.split(direction=direction)
         
         self.cast[config.name] = config
         
@@ -259,6 +269,53 @@ class Kubrux:
                 pane = self._get_pane(config.name)
                 pane.send_keys("exit", enter=True)
                 time.sleep(0.5)  # Give script time to terminate
+
+    def close_ssh(self):
+        """
+        Cleanly close SSH sessions for all non-local actors by sending 'exit'.
+        """
+        logger.info("Closing SSH sessions...")
+        for config in self.cast.values():
+            if config.host and not config.is_local:
+                try:
+                    pane = self._get_pane(config.name)
+                except Exception:
+                    continue
+                logger.debug(f"[{config.name}] Closing SSH session with 'exit'")
+                pane.send_keys("exit", enter=True)
+                time.sleep(0.5)
+
+    def close_to_main_pane(self):
+        """
+        Collapse the tmux layout to a single pane (the lead actor's pane).
+        """
+        if not self.cast or not self.lead_actor:
+            return
+        try:
+            lead_pane = self._get_pane(self.lead_actor)
+        except Exception as e:
+            logger.debug(f"Failed to get lead pane for collapse: {e}")
+            return
+
+        try:
+            # Ensure lead pane is selected, then kill all others.
+            try:
+                lead_pane.select()
+            except AttributeError:
+                lead_pane.select_pane()
+            lead_pane.kill(all_except=True)
+            logger.info("Collapsed tmux panes to lead actor pane.")
+        except TypeError:
+            # Older libtmux without all_except support: fall back to manual kill.
+            window = self.session.active_window
+            for pane in list(window.panes):
+                if pane.id != lead_pane.id:
+                    try:
+                        pane.kill()
+                    except Exception:
+                        logger.debug("Failed to kill pane during collapse.", exc_info=True)
+        except Exception:
+            logger.debug("Failed to collapse panes to main pane.", exc_info=True)
     
     def _parse_defaults_directive(self, line: str) -> ActorConfig:
         """Parse @defaults line into a config used as defaults for @actor (name and pane unused)."""
@@ -354,7 +411,6 @@ class Kubrux:
     def direct(self, scene_file: Path, default_host: str = None,
                default_dir: str = None, default_script: str = None,
                default_local: bool = False, shared_defaults: Optional[ActorConfig] = None):
-        
         logger.info(f"Directing scene file: {scene_file}")
         content = scene_file.read_text()
         lines = content.splitlines()
@@ -432,6 +488,11 @@ class Kubrux:
         
         # Second pass: action!
         for line in lines:
+            # Allow cooperative early stop if requested (e.g., from tmux interrupt).
+            if self.stop_requested is not None and self.stop_requested.is_set():
+                logger.info("Stop requested; halting scene playback.")
+                raise KubruxStopRequested()
+
             line = line.rstrip()
             
             if not line or line.startswith("##") or line.strip().startswith("@defaults") or line.strip().startswith("@actor ") or line.strip().startswith("@layout ") or line.strip().startswith("@attach"):
@@ -678,6 +739,10 @@ def main():
             logger.info(f"Extracted shared defaults: host={shared_defaults.host}, dir={shared_defaults.working_dir}")
     
     director = Kubrux(session_name=args.session)
+
+    # Shared stop flag used for cooperative interruption (e.g., from tmux key binding).
+    stop_requested = threading.Event()
+    director.stop_requested = stop_requested
     
     scene_list = ", ".join(str(sf) for sf in scene_files)
     print(f"🎬 Directing: {scene_list}")
@@ -687,9 +752,12 @@ def main():
 
     def run_scenes():
         nonlocal exit_code
+        wrapped = False
         try:
             # Run all scenes sequentially
             for i, scene_file in enumerate(scene_files, 1):
+                if stop_requested.is_set():
+                    raise KubruxStopRequested()
                 print(f"\n🎭 Scene {i}/{len(scene_files)}: {scene_file.name}")
                 director.direct(
                     scene_file,
@@ -702,6 +770,7 @@ def main():
             
             # Wrap up all script recordings
             director.wrap()
+            wrapped = True
             
             # Create tar archive if requested
             if args.finalize:
@@ -709,29 +778,90 @@ def main():
             
             print("\n🎬 That's a wrap!")
             exit_code = 0
+        except KubruxStopRequested:
+            print("\n🛑 Director stopped by user!")
+            exit_code = 1
         except KeyboardInterrupt:
             print("\n🛑 Director interrupted!")
             exit_code = 1
         except Exception:
             logger.exception("Fatal error during scene execution")
             exit_code = 1
+        finally:
+            # Ensure scripts are stopped on error/interrupt as well.
+            if not wrapped:
+                try:
+                    director.wrap()
+                except Exception:
+                    logger.debug("Error while wrapping scripts during cleanup.", exc_info=True)
+            # Always attempt final teardown: close ssh, collapse panes, then
+            # kill the tmux session so the user is returned to their original shell.
+            try:
+                director.close_ssh()
+                director.close_to_main_pane()
+                try:
+                    director.session.kill()
+                except Exception:
+                    logger.debug("Error while killing tmux session during teardown.", exc_info=True)
+            except Exception:
+                logger.debug("Error during final teardown.", exc_info=True)
+
+    # SIGUSR1 handler used when attached to tmux to request cooperative stop.
+    pid_file: Optional[Path] = None
+
+    def _handle_sigusr1(signum, frame):
+        stop_requested.set()
 
     if args.attach:
-        # Run the scenes in a background thread so we can attach this terminal
-        # to the tmux session and watch the action live.
-        scene_thread = threading.Thread(target=run_scenes, daemon=False)
-        scene_thread.start()
+        try:
+            signal.signal(signal.SIGUSR1, _handle_sigusr1)
+        except (ValueError, OSError, AttributeError):
+            logger.debug("Failed to install SIGUSR1 handler; stop via tmux may be unavailable.", exc_info=True)
+
+        # Write PID file for tmux binding to signal this process.
+        pid_file = Path(f"/tmp/kubrux-{args.session}.pid")
+        try:
+            pid_file.write_text(str(os.getpid()), encoding="utf-8")
+        except Exception:
+            logger.debug(f"Failed to write PID file at {pid_file}", exc_info=True)
+
+        # Bind prefix+Q in tmux to send SIGUSR1 to this process.
+        bind_command = f"kill -USR1 $(cat {shlex.quote(str(pid_file))} 2>/dev/null) 2>/dev/null"
+        try:
+            subprocess.run(
+                # Use the 'prefix' table so this is triggered by the tmux prefix
+                # (usually Ctrl-b) followed by 'Q'.
+                ["tmux", "bind-key", "-T", "prefix", "Q", "run-shell", bind_command],
+                check=False,
+            )
+        except FileNotFoundError:
+            logger.debug("tmux binary not found; cannot set interrupt key binding.", exc_info=True)
+        except Exception:
+            logger.debug("Failed to bind tmux interrupt key.", exc_info=True)
 
         try:
-            subprocess.run(["tmux", "attach", "-t", args.session], check=False)
-        except FileNotFoundError:
-            print(
-                "tmux binary not found; cannot auto-attach. "
-                f"You can manually run 'tmux attach -t {args.session}' if tmux is installed."
-            )
+            # Run the scenes in a background thread so we can attach this terminal
+            # to the tmux session and watch the action live.
+            scene_thread = threading.Thread(target=run_scenes, daemon=False)
+            scene_thread.start()
 
-        scene_thread.join()
-        return exit_code
+            try:
+                subprocess.run(["tmux", "attach", "-t", args.session], check=False)
+            except FileNotFoundError:
+                print(
+                    "tmux binary not found; cannot auto-attach. "
+                    f"You can manually run 'tmux attach -t {args.session}' if tmux is installed."
+                )
+
+            scene_thread.join()
+            return exit_code
+        finally:
+            if pid_file is not None:
+                try:
+                    if pid_file.exists():
+                        pid_file.unlink()
+                except Exception:
+                    logger.debug("Failed to remove PID file during cleanup.", exc_info=True)
     else:
         run_scenes()
         return exit_code
